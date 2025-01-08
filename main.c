@@ -22,6 +22,7 @@
 #include "simple_ftl.h"
 #include "kv_ftl.h"
 #include "dma.h"
+#include "my_char_device.h"
 
 /****************************************************************
  * Memory Layout
@@ -58,6 +59,8 @@ struct nvmev_dev *nvmev_vdev = NULL;
 
 static unsigned long memmap_start = 0;
 static unsigned long memmap_size = 0;
+unsigned long pagefault_start = 0;
+unsigned long pagefault_size = 0;
 
 static unsigned int read_time = 1;
 static unsigned int read_delay = 1;
@@ -91,6 +94,10 @@ module_param_cb(memmap_start, &ops_parse_mem_param, &memmap_start, 0444);
 MODULE_PARM_DESC(memmap_start, "Reserved memory address");
 module_param_cb(memmap_size, &ops_parse_mem_param, &memmap_size, 0444);
 MODULE_PARM_DESC(memmap_size, "Reserved memory size");
+// module_param_cb(pagefault_start, &ops_parse_mem_param, &pagefault_start, 0444);
+// MODULE_PARM_DESC(pagefault_start, "memory address");
+// module_param_cb(pagefault_size, &ops_parse_mem_param, &pagefault_size, 0444);
+// MODULE_PARM_DESC(pagefault_size, "memory size");
 module_param(read_time, uint, 0644);
 MODULE_PARM_DESC(read_time, "Read time in nanoseconds");
 module_param(read_delay, uint, 0644);
@@ -638,6 +645,13 @@ static int NVMeV_init(void)
 
 	NVMEV_INFO("Virtual NVMe device created\n");
 
+	// create my virtual char device
+	printk("mstart=%lx msize=%lx",memmap_start,memmap_size);
+	pagefault_start = memmap_start + MB(2);
+	pagefault_size = memmap_size - MB(2);
+	if (create_mydev()){
+		goto ret_err;
+	}
 	return 0;
 
 ret_err:
@@ -675,6 +689,9 @@ static void NVMeV_exit(void)
 	VDEV_FINALIZE(nvmev_vdev);
 
 	NVMEV_INFO("Virtual NVMe device closed\n");
+	
+	// destroy my virtual char device
+	destroy_mydev();
 }
 
 MODULE_LICENSE("GPL v2");

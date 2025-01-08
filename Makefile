@@ -10,6 +10,26 @@ default:
 install:
 		$(MAKE) INSTALL_MOD_PATH="$(INSTALL_MOD_PATH)" -C $(KERNELDIR) modules_install
 
+insert:
+		sudo insmod ./nvmev.ko memmap_start=16G memmap_size=32G cpus=7,8
+
+remove:
+		sudo rmmod nvmev
+
+dmesg:
+		sudo dmesg | tail -n 20
+
+# 编译用户空间程序
+user_program: user_program.c
+		gcc -o user_program user_program.c
+
+# 运行测试程序
+run_read:
+		sudo ./user_program
+
+run_write:
+		sudo ./user_program "hello"
+
 .PHONY: clean
 clean:
 	   $(MAKE) -C $(KERNELDIR) M=$(PWD) clean

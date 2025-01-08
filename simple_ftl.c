@@ -20,7 +20,7 @@ static size_t __cmd_io_size(struct nvme_rw_command *cmd)
 }
 
 /* Return the time to complete */
-static unsigned long long __schedule_io_units(int opcode, unsigned long lba, unsigned int length,
+unsigned long long __schedule_io_units(int opcode, unsigned long lba, unsigned int length,
 					      unsigned long long nsecs_start)
 {
 	unsigned int io_unit_size = 1 << nvmev_vdev->config.io_unit_shift;

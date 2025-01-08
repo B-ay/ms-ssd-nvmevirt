@@ -75,4 +75,8 @@ void conv_remove_namespace(struct nvmev_ns *ns);
 bool conv_proc_nvme_io_cmd(struct nvmev_ns *ns, struct nvmev_request *req,
 			   struct nvmev_result *ret);
 
+bool conv_read(struct nvmev_ns *ns, struct nvmev_request *req, struct nvmev_result *ret);
+
+bool conv_write(struct nvmev_ns *ns, struct nvmev_request *req, struct nvmev_result *ret);
+
 #endif
