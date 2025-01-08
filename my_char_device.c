@@ -29,8 +29,8 @@
 #define LBA_BITS (9)
 #define LBA_SIZE (1 << LBA_BITS)
 #define PAGE_BUFFER_SIZE 10
-#define numerator 9
-#define denominator 10
+#define numerator 95
+#define denominator 100
 
 struct my_char_device *my_char_vdevice = NULL;
 static struct dev_pagemap dev_pagemap;
@@ -42,13 +42,16 @@ extern unsigned long pagefault_size;
 static int count = 0;
 static unsigned long address_buffer[PAGE_BUFFER_SIZE];
 static unsigned long next_pointer = 0;
-static struct task_struct *test_kthread = NULL;
+static struct task_struct *mark_kthread = NULL;
+static struct task_struct *eviction_kthread = NULL;
 static struct my_inactive_list my_inactive_list = {NULL, 0};
 static struct my_active_list  my_active_list = {NULL, 0};
 static unsigned long total_mem = 0;
 static unsigned long used_mem = 0;
 struct my_page *eviction_page;
+struct my_page *eviction_page2;
 struct my_page *tmp;
+struct vm_area_struct *vma;
 
 
 static inline unsigned long long __get_wallclock(void)
@@ -56,7 +59,17 @@ static inline unsigned long long __get_wallclock(void)
 	return cpu_clock(nvmev_vdev->config.cpu_nr_dispatcher);
 }
 
-static int kthread_test_func(void *data)   //定义一个内核线程要执行的函数，用于维护active_list和inactive_list
+static void print_list(struct my_page *p)
+{
+    while(p != NULL)
+    {
+        printk("/*address:%lx*/ ", p->address);
+        p = p->next;
+    }
+    printk("\n");
+}
+
+static int kthread_mark_func(void *data)   //定义一个内核线程要执行的函数，用于维护active_list和inactive_list
 {
 	while (!kthread_should_stop()) {
 		struct my_page *active_pointer = my_active_list.active_list;
@@ -111,15 +124,149 @@ static int kthread_test_func(void *data)   //定义一个内核线程要执行�
                 inactive_pointer = inactive_pointer->next;
             }
         }
+        // size_t threhold = total_mem * 8 / 10;
+        // while (used_mem > threhold) {
+        //     // 内存不足，需要淘汰页面 
+        //     if (my_inactive_list.nr_inactive > 0) {  // 从inactive_list中淘汰页面
+        //         eviction_page2 = my_inactive_list.inactive_list;
+        //         my_inactive_list.inactive_list = my_inactive_list.inactive_list->next;
+        //         my_inactive_list.inactive_list->pre = NULL;
+        //         // 写入ssd
+        //         struct nvme_rw_command *cmd = vmalloc(sizeof(struct nvme_rw_command));
+        //         cmd->slba = (eviction_page2->address - vma->vm_start) >> LBA_BITS;
+        //         cmd->length = 4096 / LBA_SIZE; // pg == 4KB
+        //         cmd->control = 0;
+        //         struct nvmev_request req = {
+        //             .cmd = (struct nvme_command *)cmd,
+        //             .sq_id = 0,
+        //             .nsecs_start = 0,
+        //         };
+        //         struct nvmev_result ret = {
+        //             .nsecs_target = 0,
+        //             .status = NVME_SC_SUCCESS,
+        //         };
+        //         struct nvmev_ns *ns = &nvmev_vdev->ns[0];
+        //         if (conv_write(ns, &req, &ret))
+        //         {
+        //             printk("write delay:%llu\n",ret.nsecs_target);
+        //         }
+        //         // 淘汰页面
+        //         zap_vma_ptes(vma, eviction_page2->address, PAGE_SIZE);
+        //         used_mem -= PAGE_SIZE;
+        //         kfree(eviction_page2);
+        //         kfree(cmd);
+        //     }
+        //     else {
+        //         eviction_page2 = my_active_list.active_list;
+        //         my_active_list.active_list = my_active_list.active_list->next;
+        //         my_active_list.active_list->pre = NULL;
+        //         // 写入ssd
+        //         struct nvme_rw_command *cmd = vmalloc(sizeof(struct nvme_rw_command));
+        //         cmd->slba = (eviction_page2->address - vma->vm_start) >> LBA_BITS;
+        //         cmd->length = 4096 / LBA_SIZE; // pg == 4KB
+        //         cmd->control = 0;
+        //         struct nvmev_request req = {
+        //             .cmd = (struct nvme_command *)cmd,
+        //             .sq_id = 0,
+        //             .nsecs_start = 0,
+        //         };
+        //         struct nvmev_result ret = {
+        //             .nsecs_target = 0,
+        //             .status = NVME_SC_SUCCESS,
+        //         };
+        //         struct nvmev_ns *ns = &nvmev_vdev->ns[0];
+        //         if (conv_write(ns, &req, &ret))
+        //         {
+        //             printk("write delay:%llu\n",ret.nsecs_target);
+        //         }
+        //         // 淘汰页面
+        //         zap_vma_ptes(vma, eviction_page2->address, PAGE_SIZE);
+        //         used_mem -= PAGE_SIZE;
+        //         kfree(eviction_page2);
+        //         kfree(cmd);
+        //     }
+        //     // zap_vma_ptes(vma, address_buffer[next_pointer], PAGE_SIZE);
+        // }
         // printk("this is kthread!\n");
         msleep(5000);
 	}
 	return 0;
 }
 
+static int kthread_eviction_func(void *data)   //定义一个内核线程要执行的函数，用于维护active_list和inactive_list
+{
+	while (!kthread_should_stop()) {
+        size_t threhold = total_mem * 8 / 10;
+        while (used_mem > threhold) {
+            // 内存不足，需要淘汰页面 
+            if (my_inactive_list.nr_inactive > 0) {  // 从inactive_list中淘汰页面
+                eviction_page2 = my_inactive_list.inactive_list;
+                my_inactive_list.inactive_list = my_inactive_list.inactive_list->next;
+                my_inactive_list.inactive_list->pre = NULL;
+                // 写入ssd
+                struct nvme_rw_command *cmd = vmalloc(sizeof(struct nvme_rw_command));
+                cmd->slba = (eviction_page2->address - vma->vm_start) >> LBA_BITS;
+                cmd->length = 4096 / LBA_SIZE; // pg == 4KB
+                cmd->control = 0;
+                struct nvmev_request req = {
+                    .cmd = (struct nvme_command *)cmd,
+                    .sq_id = 0,
+                    .nsecs_start = 0,
+                };
+                struct nvmev_result ret = {
+                    .nsecs_target = 0,
+                    .status = NVME_SC_SUCCESS,
+                };
+                struct nvmev_ns *ns = &nvmev_vdev->ns[0];
+                if (conv_write(ns, &req, &ret))
+                {
+                    printk("write delay:%llu\n",ret.nsecs_target);
+                }
+                // 淘汰页面
+                zap_vma_ptes(vma, eviction_page2->address, PAGE_SIZE);
+                used_mem -= PAGE_SIZE;
+                kfree(eviction_page2);
+                kfree(cmd);
+            }
+            else {
+                eviction_page2 = my_active_list.active_list;
+                my_active_list.active_list = my_active_list.active_list->next;
+                my_active_list.active_list->pre = NULL;
+                // 写入ssd
+                struct nvme_rw_command *cmd = vmalloc(sizeof(struct nvme_rw_command));
+                cmd->slba = (eviction_page2->address - vma->vm_start) >> LBA_BITS;
+                cmd->length = 4096 / LBA_SIZE; // pg == 4KB
+                cmd->control = 0;
+                struct nvmev_request req = {
+                    .cmd = (struct nvme_command *)cmd,
+                    .sq_id = 0,
+                    .nsecs_start = 0,
+                };
+                struct nvmev_result ret = {
+                    .nsecs_target = 0,
+                    .status = NVME_SC_SUCCESS,
+                };
+                struct nvmev_ns *ns = &nvmev_vdev->ns[0];
+                if (conv_write(ns, &req, &ret))
+                {
+                    printk("write delay:%llu\n",ret.nsecs_target);
+                }
+                // 淘汰页面
+                zap_vma_ptes(vma, eviction_page2->address, PAGE_SIZE);
+                used_mem -= PAGE_SIZE;
+                kfree(eviction_page2);
+                kfree(cmd);
+            }
+            // zap_vma_ptes(vma, address_buffer[next_pointer], PAGE_SIZE);
+        }
+        msleep(10000);
+	}
+	return 0;
+}
+
 vm_fault_t nvmev_fault(struct vm_fault *vmf)
 {
-    struct vm_area_struct *vma = vmf->vma;
+    vma = vmf->vma;
     size_t threhold = total_mem * numerator / denominator;
     while (used_mem > threhold) {
         // 内存不足，需要淘汰页面 
@@ -127,22 +274,69 @@ vm_fault_t nvmev_fault(struct vm_fault *vmf)
             eviction_page = my_inactive_list.inactive_list;
             my_inactive_list.inactive_list = my_inactive_list.inactive_list->next;
             my_inactive_list.inactive_list->pre = NULL;
+            // 写入ssd
+            struct nvme_rw_command *cmd = vmalloc(sizeof(struct nvme_rw_command));
+            cmd->slba = (eviction_page->address - vma->vm_start) >> LBA_BITS;
+            cmd->length = 4096 / LBA_SIZE; // pg == 4KB
+            cmd->control = 0;
+            struct nvmev_request req = {
+                .cmd = (struct nvme_command *)cmd,
+                .sq_id = 0,
+                .nsecs_start = 0,
+            };
+            struct nvmev_result ret = {
+                .nsecs_target = 0,
+                .status = NVME_SC_SUCCESS,
+            };
+            struct nvmev_ns *ns = &nvmev_vdev->ns[0];
+            if (conv_write(ns, &req, &ret))
+            {
+                printk("write delay:%llu\n",ret.nsecs_target);
+            }
             // 淘汰页面
             zap_vma_ptes(vma, eviction_page->address, PAGE_SIZE);
             used_mem -= PAGE_SIZE;
             kfree(eviction_page);
+            kfree(cmd);
         }
-        else {
+        else {  // 从active_list中淘汰页面
             eviction_page = my_active_list.active_list;
             my_active_list.active_list = my_active_list.active_list->next;
             my_active_list.active_list->pre = NULL;
+            // 写入ssd
+            struct nvme_rw_command *cmd = vmalloc(sizeof(struct nvme_rw_command));
+            cmd->slba = (eviction_page->address - vma->vm_start) >> LBA_BITS;
+            cmd->length = 4096 / LBA_SIZE; // pg == 4KB
+            cmd->control = 0;
+            struct nvmev_request req = {
+                .cmd = (struct nvme_command *)cmd,
+                .sq_id = 0,
+                .nsecs_start = 0,
+            };
+            struct nvmev_result ret = {
+                .nsecs_target = 0,
+                .status = NVME_SC_SUCCESS,
+            };
+            struct nvmev_ns *ns = &nvmev_vdev->ns[0];
+            if (conv_write(ns, &req, &ret))
+            {
+                printk("write delay:%llu\n",ret.nsecs_target);
+            }
             // 淘汰页面
             zap_vma_ptes(vma, eviction_page->address, PAGE_SIZE);
             used_mem -= PAGE_SIZE;
             kfree(eviction_page);
+            kfree(cmd);
         }
         // zap_vma_ptes(vma, address_buffer[next_pointer], PAGE_SIZE);
     }
+    
+    // 打印active_list和inactive_list
+    printk("active list: ");
+    print_list(my_active_list.active_list);
+    printk("inactive list: ");
+    print_list(my_inactive_list.inactive_list);
+
     struct nvme_rw_command *cmd = vmalloc(sizeof(struct nvme_rw_command));
     cmd->slba = (vmf->address - vma->vm_start) >> LBA_BITS;
     cmd->length = 4096 / LBA_SIZE; // pg == 4KB
@@ -208,11 +402,6 @@ vm_fault_t nvmev_fault(struct vm_fault *vmf)
     // count++;
     // last_page_pointor = free_page_pointor++;
     // printk("free page pointor: %lx\n", free_page_pointor);
-
-    if (conv_write(ns, &req, &ret))
-    {
-        printk("write delay:%llu\n",ret.nsecs_target);
-    }
 
     return 0;
 }
@@ -288,15 +477,20 @@ int create_mydev(void)
     //     goto err_alloc;
     // }
 
-    test_kthread = kthread_run(kthread_test_func, NULL, "kthread-test");  //创建线程kthread-test，并且运行
-	if (!test_kthread) {
+    mark_kthread = kthread_run(kthread_mark_func, NULL, "kthread-mark");  //创建线程kthread-test，并且运行
+	if (!mark_kthread) {
 		goto err_dummy_device;
+	}
+
+    eviction_kthread = kthread_run(kthread_eviction_func, NULL, "kthread-eviction");  //创建线程kthread-test，并且运行
+	if (!eviction_kthread) {
+		goto err_kthread_mark;
 	}
 
     // 分配设备号
     ret = alloc_chrdev_region(&my_char_vdevice->devt, 0, 1, MY_DEVICE_NAME);
     if (ret)
-        goto err_kthread;
+        goto err_kthread_eviction;
 
     cdev_init(&my_char_vdevice->cdev, &nvmev_fops);
     my_char_vdevice->cdev.owner = THIS_MODULE;
@@ -331,10 +525,13 @@ err_cdev:
     cdev_del(&my_char_vdevice->cdev);
 err_chrdev:
     unregister_chrdev_region(my_char_vdevice->devt, 1);
-err_kthread:
+err_kthread_eviction:
+    kthread_stop(eviction_kthread); //停止内核线程
+	eviction_kthread = NULL;
+err_kthread_mark:
     // memunmap(my_char_vdevice->storage_mapped);
-    kthread_stop(test_kthread); //停止内核线程
-	test_kthread = NULL;
+    kthread_stop(mark_kthread); //停止内核线程
+	mark_kthread = NULL;
 err_dummy_device:
     kfree(dummy_device);
     memunmap_pages(&dev_pagemap);
@@ -345,9 +542,13 @@ err_alloc:
 
 void destroy_mydev(void)
 {
-    if (test_kthread) {
-		kthread_stop(test_kthread); //停止内核线程
-		test_kthread = NULL;
+    if (mark_kthread) {
+		kthread_stop(mark_kthread); //停止内核线程
+		mark_kthread = NULL;
+	}
+    if (eviction_kthread) {
+		kthread_stop(eviction_kthread); //停止内核线程
+		eviction_kthread = NULL;
 	}
     kfree(dummy_device);
     memunmap_pages(&dev_pagemap);
