@@ -18,6 +18,7 @@
 #include <linux/memory.h>
 #include <linux/memory_hotplug.h>
 #include <linux/delay.h>
+#include <linux/spinlock.h>
 
 #include "my_char_device.h"
 #include "simple_ftl.h"
@@ -53,6 +54,10 @@ struct my_page *eviction_page2;
 struct my_page *tmp;
 struct vm_area_struct *vma;
 
+// 定义锁和受保护的资源
+static DEFINE_SPINLOCK(inactive_list_lock);  // 静态初始化自旋锁
+static DEFINE_SPINLOCK(active_list_lock);  // 静态初始化自旋锁
+
 
 static inline unsigned long long __get_wallclock(void)
 {
@@ -79,6 +84,7 @@ static int kthread_mark_func(void *data)   //定义一个内核线程要执行�
                 tmp = active_pointer;
                 active_pointer = active_pointer->next;
                 // 从active_list中摘除
+                spin_lock(&active_list_lock);          // 获取锁
                 if (tmp == my_active_list.active_list)
                     my_active_list.active_list = tmp->next;
                 if (tmp->pre != NULL)
@@ -86,13 +92,16 @@ static int kthread_mark_func(void *data)   //定义一个内核线程要执行�
                 if (tmp->next != NULL)
                     tmp->next->pre = tmp->pre;
                 my_active_list.nr_active -= 1;
+                spin_unlock(&active_list_lock);        // 释放锁
                 // 插入inactive_list中
+                spin_lock(&inactive_list_lock);          // 获取锁
                 if (my_inactive_list.inactive_list != NULL)
                     my_inactive_list.inactive_list->pre = tmp;
                 tmp->next = my_inactive_list.inactive_list;
                 tmp->pre = NULL;
                 my_inactive_list.inactive_list = tmp;
                 my_inactive_list.nr_inactive += 1;
+                spin_unlock(&inactive_list_lock);        // 释放锁
             }
             else {
                 active_pointer = active_pointer->next;
@@ -105,6 +114,7 @@ static int kthread_mark_func(void *data)   //定义一个内核线程要执行�
                 tmp = inactive_pointer;
                 inactive_pointer = inactive_pointer->next;
                 // 从inactive_list中摘除
+                spin_lock(&inactive_list_lock);          // 获取锁
                 if (tmp == my_inactive_list.inactive_list)
                     my_inactive_list.inactive_list = tmp->next;
                 if (tmp->pre != NULL)
@@ -112,13 +122,16 @@ static int kthread_mark_func(void *data)   //定义一个内核线程要执行�
                 if (tmp->next != NULL)
                     tmp->next->pre = tmp->pre;
                 my_inactive_list.nr_inactive -= 1;
+                spin_unlock(&inactive_list_lock);        // 释放锁
                 // 插入active_list中
+                spin_lock(&active_list_lock);          // 获取锁
                 if (my_active_list.active_list != NULL)
                     my_active_list.active_list->pre = tmp;
                 tmp->next = my_active_list.active_list;
                 tmp->pre = NULL;
                 my_active_list.active_list = tmp;
                 my_active_list.nr_active += 1;
+                spin_unlock(&active_list_lock);        // 释放锁
             }
             else {
                 inactive_pointer = inactive_pointer->next;
@@ -200,9 +213,11 @@ static int kthread_eviction_func(void *data)   //定义一个内核线程要执�
         while (used_mem > threhold) {
             // 内存不足，需要淘汰页面 
             if (my_inactive_list.nr_inactive > 0) {  // 从inactive_list中淘汰页面
+                spin_lock(&inactive_list_lock);          // 获取锁
                 eviction_page2 = my_inactive_list.inactive_list;
                 my_inactive_list.inactive_list = my_inactive_list.inactive_list->next;
                 my_inactive_list.inactive_list->pre = NULL;
+                spin_unlock(&inactive_list_lock);        // 释放锁
                 // 写入ssd
                 struct nvme_rw_command *cmd = vmalloc(sizeof(struct nvme_rw_command));
                 cmd->slba = (eviction_page2->address - vma->vm_start) >> LBA_BITS;
@@ -229,9 +244,11 @@ static int kthread_eviction_func(void *data)   //定义一个内核线程要执�
                 kfree(cmd);
             }
             else {
+                spin_lock(&active_list_lock);          // 获取锁
                 eviction_page2 = my_active_list.active_list;
                 my_active_list.active_list = my_active_list.active_list->next;
                 my_active_list.active_list->pre = NULL;
+                spin_unlock(&active_list_lock);        // 释放锁
                 // 写入ssd
                 struct nvme_rw_command *cmd = vmalloc(sizeof(struct nvme_rw_command));
                 cmd->slba = (eviction_page2->address - vma->vm_start) >> LBA_BITS;
@@ -271,9 +288,11 @@ vm_fault_t nvmev_fault(struct vm_fault *vmf)
     while (used_mem > threhold) {
         // 内存不足，需要淘汰页面 
         if (my_inactive_list.nr_inactive > 0) {  // 从inactive_list中淘汰页面
+            spin_lock(&inactive_list_lock);          // 获取锁
             eviction_page = my_inactive_list.inactive_list;
             my_inactive_list.inactive_list = my_inactive_list.inactive_list->next;
             my_inactive_list.inactive_list->pre = NULL;
+            spin_unlock(&inactive_list_lock);        // 释放锁
             // 写入ssd
             struct nvme_rw_command *cmd = vmalloc(sizeof(struct nvme_rw_command));
             cmd->slba = (eviction_page->address - vma->vm_start) >> LBA_BITS;
@@ -292,6 +311,7 @@ vm_fault_t nvmev_fault(struct vm_fault *vmf)
             if (conv_write(ns, &req, &ret))
             {
                 printk("write delay:%llu\n",ret.nsecs_target);
+                msleep(ret.nsecs_target);
             }
             // 淘汰页面
             zap_vma_ptes(vma, eviction_page->address, PAGE_SIZE);
@@ -300,9 +320,11 @@ vm_fault_t nvmev_fault(struct vm_fault *vmf)
             kfree(cmd);
         }
         else {  // 从active_list中淘汰页面
+            spin_lock(&active_list_lock);          // 获取锁
             eviction_page = my_active_list.active_list;
             my_active_list.active_list = my_active_list.active_list->next;
             my_active_list.active_list->pre = NULL;
+            spin_unlock(&active_list_lock);        // 释放锁
             // 写入ssd
             struct nvme_rw_command *cmd = vmalloc(sizeof(struct nvme_rw_command));
             cmd->slba = (eviction_page->address - vma->vm_start) >> LBA_BITS;
@@ -321,6 +343,7 @@ vm_fault_t nvmev_fault(struct vm_fault *vmf)
             if (conv_write(ns, &req, &ret))
             {
                 printk("write delay:%llu\n",ret.nsecs_target);
+                msleep(ret.nsecs_target);
             }
             // 淘汰页面
             zap_vma_ptes(vma, eviction_page->address, PAGE_SIZE);
@@ -354,6 +377,7 @@ vm_fault_t nvmev_fault(struct vm_fault *vmf)
     if (conv_read(ns, &req, &ret))
     {
         printk("read delay:%llu\n",ret.nsecs_target);
+        msleep(ret.nsecs_target);
     }
 	
     // if (count == 0)
