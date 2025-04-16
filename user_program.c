@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 
-#define SIZE (4UL * 1024 * 1024) // 16GB
+#define SIZE (4UL * 1024) // 16GB
 
 
 int main(int argc, char *argv[])
@@ -40,9 +40,12 @@ int main(int argc, char *argv[])
         printf("Written to memory: %s\n", input_str);
     } else {
         // 没有命令行输入，则读取内存中的字符串并打印
-        printf("Read from memory: %s\n", (char *)mapped_mem);
-        printf("Read from memory: %s\n", (char *)mapped_mem+SIZE);
-        printf("Read from memory: %s\n", (char *)mapped_mem);
+        for (int i = 0; i < 4; i++) {
+            printf("Read from memory: %s\n", (char *)mapped_mem + i * SIZE);
+        }
+        // printf("Read from memory: %s\n", (char *)mapped_mem);
+        // printf("Read from memory: %s\n", (char *)mapped_mem+SIZE);
+        // printf("Read from memory: %s\n", (char *)mapped_mem);
     }
 
     munmap(mapped_mem, 4*SIZE);

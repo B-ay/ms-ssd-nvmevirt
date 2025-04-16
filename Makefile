@@ -23,12 +23,20 @@ dmesg:
 user_program: user_program.c
 		gcc -o user_program user_program.c
 
-# 运行测试程序
+# 编译测试程序
+user_test: ssd_mmap_test.c
+		gcc -o ssd_mmap_test ssd_mmap_test.c
+
+# 运行用户空间程序
 run_read:
 		sudo ./user_program
 
 run_write:
 		sudo ./user_program "hello"
+
+# 运行测试程序
+run_test:
+		sudo ./ssd_mmap_test
 
 .PHONY: clean
 clean:

@@ -30,12 +30,14 @@ struct my_page {
 };
 
 struct my_active_list {
-    struct my_page *active_list;
+    struct my_page *head;
+    struct my_page *tail;
     unsigned long nr_active;
 };
 
 struct my_inactive_list {
-    struct my_page *inactive_list;
+    struct my_page *head;
+    struct my_page *tail;
     unsigned long nr_inactive;
 };
 
