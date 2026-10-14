@@ -1,3 +1,30 @@
+# ms-ssd-nvmevirt · NVMeVirt 存储映射实验
+
+基于原有 NVMeVirt 工程开展的 Linux 内核存储实验。原项目来源、论文、许可与安装说明保留在下文；NVMeVirt 整体架构与设备支持属于上游工作，个人贡献需通过提交差异另行确认。
+
+## 本仓库值得先看的内容
+
+| 文件 | 当前代码中的实验内容 |
+| --- | --- |
+| [my_char_device.c](my_char_device.c) | 字符设备注册、mmap 与缺页处理，包含保留内存映射相关逻辑 |
+| [my_char_device.h](my_char_device.h) | 字符设备和页链表数据结构 |
+| [user_program.c](user_program.c) | 打开 /dev/nvmev_device，通过 mmap 读写示例 |
+| [Kbuild](Kbuild) | 当前选择 SSD 配置，并将 my_char_device.o 纳入模块 |
+
+`my_char_device.c` 中存在注释掉的标记/回收线程代码；不能仅因定义了 active/inactive 链表就声称已完成页面替换算法。`append_only.c` 为顺序追加分配路径，也不等于完整回收器。
+
+## 构建与验证边界
+
+当前 Kbuild 选择的是 `CONFIG_NVMEVIRT_SSD := y`，与下方保留的上游“默认 NVM”说明不同；构建应以当前 Kbuild 和实际内核接口为准。
+
+需要独立 Linux 实验环境、匹配内核头文件、正确的保留内存与设备配置。用户态示例可用 C 编译器构建，但运行依赖内核模块提供字符设备。本次在 Windows 上仅核验源码与构建配置，未加载模块、调整引导参数或进行 I/O 测试。
+
+后续验证重点：映射范围与长度边界、缺页路径并发、模块退出后的资源释放，以及用户态错误路径；当前没有可写入简历的性能提升数值。下方原始步骤中的内存地址和大小只是示例，需按实验机器实际配置。
+
+---
+
+## 保留的上游项目说明
+
 # NVMeVirt
 
 ## Introduction
